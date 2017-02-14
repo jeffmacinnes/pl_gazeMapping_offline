@@ -23,9 +23,9 @@ import cv2
 import json
 import numpy as np 
 
+OPENCV3 = (cv2.__version__.split('.')[0] == '3')
 
-
-class projectionTools:
+class GazeMapper:
 	def __init__(self, camera_calibration, ref_image, obj_image_size):
 		"""
 		camera_calibration: camera calibration json file
@@ -41,7 +41,7 @@ class projectionTools:
 		self.distCoefs = np.asarray(dictValues['dist_coefs'])
 
 		# Load the ref image, calculate pixels/unit
-		self.refImg = cv2.imread(ref_image)
+		self.refImg = ref_image
 		self.pixPerUnit = self.refImg.shape[0]/obj_image_size[0]		# ref image mapping b/w pixels and world units
 
 		# Create a copy of the original refImg in color; convert refImg to grayscale
@@ -49,7 +49,10 @@ class projectionTools:
 		self.refImg = cv2.cvtColor(self.refImg, cv2.COLOR_BGR2GRAY)
 
 		# Initialize the feature detection object, and matching object (choose which algorithm you want)
-		self.featureDetect = cv2.SIFT()
+		if OPENCV3:
+			self.featureDetect = cv2.xfeatures2d.SIFT_create()
+		else:
+			self.featureDetect = cv2.SIFT()
 		self.min_match_count = 50
 		self.min_good_matches = 4
 		self.num_matches = 2 

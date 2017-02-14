@@ -82,13 +82,13 @@ def correlate_data(data,timestamps):
 
 	return data_by_frame
 
-def writeGazeData_csv(input_dir, gazeData_dict):
+def writeGazeData_world(input_dir, gazeData_dict):
 	"""
 	after the gaze data has been loaded from the pickle file, this function will write it to 
 	a readable csv file within the input_dir
 	"""
 
-	csv_file = join(input_dir, 'processed', 'gazeData.csv')
+	csv_file = join(input_dir, 'processed', 'gazeData_world.csv')
 	export_range = slice(0,len(gazeData_dict))
 	with open(csv_file, 'w', encoding='utf-8', newline='') as csvfile:
 		csv_writer = csv.writer(csvfile, delimiter='\t')
