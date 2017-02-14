@@ -37,7 +37,7 @@ def formatGazeData(input_dir):
 	# align gaze with world camera timestamps
 	gaze_by_frame = correlate_data(gaze_list, timestamps)
 
-	return gaze_by_frame
+	return gaze_by_frame, timestamps
 
 
 def correlate_data(data,timestamps):

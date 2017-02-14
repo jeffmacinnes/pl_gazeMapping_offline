@@ -70,7 +70,7 @@ def processRecording(inputDir, refFile, cameraCalib):
 	Loop through each frame of the recording and create output videos
 	"""
 	# Settings:
-	framesToUse = np.arange(0, 200, 1)	
+	framesToUse = np.arange(0, 10, 1)	
 
 	# specify output dir (create if necessary)
 	outputDir = join(inputDir, 'processed')
@@ -80,7 +80,7 @@ def processRecording(inputDir, refFile, cameraCalib):
 	### Prep the gaze data ################################
 	print('Prepping gaze data...')
 	# format pupil data
-	gazeData_world = formatGazeData(inputDir)
+	gazeData_world, frame_timestamps = formatGazeData(inputDir)
 	
 	# write the gaze data (world camera coords) to a csv file
 	writeGazeData_world(inputDir, gazeData_world)
@@ -138,14 +138,8 @@ def processRecording(inputDir, refFile, cameraCalib):
 	vidOut_refHeatmap.open(vidOutFile_refHeatmap, vidCodec, fps, refStim_dims, True)
 
 
-	### Set up parellelization for video frames #############################
-	print('Setting up multiprocessing for tasks...')
-	n_cpu = multiprocessing.cpu_count()
-	print("Using %i cores" % n_cpu)
-	pool = multiprocessing.Pool(multiprocessing.cpu_count())
-	
-	# build list of tasks
-	task_args = []
+	### Loop through frames of world video #################################
+	print('Processing frames....')
 	frameCounter = 0
 	while vid.isOpened():
 		# read the next frame of the video
@@ -154,29 +148,27 @@ def processRecording(inputDir, refFile, cameraCalib):
 		# check if it's a valid frame
 		if (ret==True) and (frameCounter in framesToUse):
 
-			# add this frame to the tasks
-			task_args.append((frameCounter, frameCounter))
+			# submit this frame to the processing function
+			processedFrame = processFrame(frameCounter, frame, mapper, gazeData_world, frame_timestamps)
+
+			# Write out this frame's different video files
+
 
 		# increment frame counter
 		frameCounter += 1
 		if frameCounter > np.max(framesToUse):
 			vid.release()
 
-	### Execute tasks in parallel ############################################
-	print('Submitting tasks to pool...')
-	results = []
-	for t in task_args:
-		results.append(pool.apply_async(processFrame, t))
 
-	for r in results:
-		i,c = r.get()
-		print(i)
-		#print(type(r))
+def processFrame(frameCounter, frame, mapper, gazeData_world, frame_timestamps):
+	""" Compute all transformations on a given frame """
 
-def processFrame(frameCounter, blah):
-	i = frameCounter
-	c = blah
-	return (i, c)
+	# create instance of Frame object
+	thisFrame = {}
+	thisFrame['frameNum'] = frameCounter
+
+
+	return thisFrame
 
 
 
