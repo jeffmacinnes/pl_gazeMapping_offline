@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd 
 import seaborn as sns
 import argparse
-
+import time
 import multiprocessing
 
 # data formatting tools
@@ -71,6 +71,9 @@ def processRecording(inputDir, refFile, cameraCalib):
 	"""
 	# Settings:
 	framesToUse = np.arange(0, 10, 1)	
+
+	# start time
+	process_startTime = time.time()
 
 	# specify output dir (create if necessary)
 	outputDir = join(inputDir, 'processed')
@@ -140,6 +143,7 @@ def processRecording(inputDir, refFile, cameraCalib):
 
 	### Loop through frames of world video #################################
 	print('Processing frames....')
+	frameProcessing_startTime = time.time()
 	frameCounter = 0
 	while vid.isOpened():
 		# read the next frame of the video
@@ -148,29 +152,168 @@ def processRecording(inputDir, refFile, cameraCalib):
 		# check if it's a valid frame
 		if (ret==True) and (frameCounter in framesToUse):
 
+			# grab the gazeData (world coords) for this frame only
+			thisFrame_gazeData_world = gazeWorld_df.loc[gazeWorld_df['index'] == frameCounter]
+
 			# submit this frame to the processing function
-			processedFrame = processFrame(frameCounter, frame, mapper, gazeData_world, frame_timestamps)
+			processedFrame = processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_timestamps)
+
+			
+			# append this frames gaze data file to the bigger list
+
+			# make the heatmaps
+
 
 			# Write out this frame's different video files
+			vidOut_orig.write(processedFrame['origFrame'])
+			vidOut_gaze.write(processedFrame['gazeFrame'])
+
 
 
 		# increment frame counter
 		frameCounter += 1
 		if frameCounter > np.max(framesToUse):
 			vid.release()
+			vidOut_orig.release()
+			vidOut_gaze.release()
+
+	endTime = time.time()
+	frameProcessing_time = endTime - frameProcessing_startTime
+	print('Total time: %s seconds' % frameProcessing_time)
+	print('Avg time/frame: %s seconds' % (frameProcessing_time/framesToUse.shape[0]) )
 
 
-def processFrame(frameCounter, frame, mapper, gazeData_world, frame_timestamps):
+def processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_timestamps):
 	""" Compute all transformations on a given frame """
 
-	# create instance of Frame object
-	thisFrame = {}
-	thisFrame['frameNum'] = frameCounter
+	fr = {}		# create dict to store info for this frame
+	fr['frameNum'] = frameCounter		# store frame number
+	
+	# create copy of original frame
+	origFrame = frame.copy()
+	fr['origFrame'] = origFrame 		# store
 
+	# convert to grayscale
+	frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-	return thisFrame
+	# get the timestamp for this frame
+	frame_ts = frame_timestamps[frameCounter]
+	fr['frame_ts'] = frame_ts 			# store
 
+	# find the key points and features on this frame
+	frame_kp, frame_des = mapper.findFeatures(frame_gray)
+	print('found %s features on frame %s' %(len(frame_kp), frameCounter))
 
+	# look for matching keypoints on the reference stimulus
+	if len(frame_kp) < 2:
+		ref_matchPts = None
+	else:
+		ref_matchPts, frame_matchPts = mapper.findMatches(frame_kp, frame_des)
+
+	# check if matches were found
+	try:
+		numMatches = ref_matchPts.shape[0]
+		
+		# if sufficient number of matches....
+		if numMatches > 10:
+			print('found %s matches on frame %s' %(numMatches, frameCounter))
+			sufficientMatches = True
+		else:
+			print('Insufficient matches (%s matches) on frame %s' %(numMatches, frameCounter))
+			sufficientMatches = False
+
+	except:
+		print ('no matches found on frame %s' % frameCounter)
+		sufficientMatches = False
+		pass
+
+	# Uses matches to find 2D and 3D transformations
+	if not sufficientMatches:
+		# if not enough matches on this frame, store the untouched frames
+		fr['gazeFrame'] = origFrame
+
+	else:
+		### 3D operations ##########################
+		# get mapping from camera to 3D location of reference image. Reference match points treated as 2D plane in the world (z=0)
+		rvec, tvec = mapper.PnP_3Dmapping(ref_matchPts, frame_matchPts)
+
+		# calculate camera position & orientation
+		camPosition, camOrientation = mapper.getCameraPosition(rvec, tvec)
+		fr['camPosition'] = camPosition
+		fr['camOrientation'] = camOrientation
+
+		### 2D operations ###########################
+		# get the transformation matrices to map between world frame and reference stimuli
+		ref2frame_2D, frame2ref_2D = mapper.get2Dmapping(ref_matchPts, frame_matchPts)
+
+		### Gaze data operations ####################
+		if thisFrame_gazeData_world.shape[0] == 0:
+			# if no gaze points for this frame
+			drawGazePt = False
+
+			# store empty dataframe to store gaze data in frame, reference, and object coordinates
+			gazeData_df = pd.DataFrame(columns=['gaze_ts', 'worldFrame', 'confidence',
+										'frame_gazeX', 'frame_gazeY',
+										'ref_gazeX', 'ref_gazeY', 
+										'obj_gazeX', 'obj_gazeY', 'obj_gazeZ'])
+			fr['gazeData'] = gazeData_df
+
+		else:
+			drawGazePt = True
+
+			# create dataframes to write gaze data into
+			gazeData_df = pd.DataFrame(columns=['gaze_ts', 'worldFrame', 'confidence',
+										'frame_gazeX', 'frame_gazeY',
+										'ref_gazeX', 'ref_gazeY', 
+										'obj_gazeX', 'obj_gazeY', 'obj_gazeZ'])
+			
+			# grab all gaze data for this frame, translate to different coordinate systems
+			for i,gazeRow in thisFrame_gazeData_world.iterrows():
+				ts = gazeRow['timestamp']
+				frameNum = frameCounter
+				conf = gazeRow['confidence']
+
+				# translate normalized gaze location to screen coords (note: pupil labs recorded normalized coords, with origin in bottom left)
+				frame_gazeX = gazeRow['norm_pos_x'] * frame_gray.shape[1]
+				frame_gazeY = frame_gray.shape[0] - (gazeRow['norm_pos_y'] * frame_gray.shape[0])
+
+				# convert coordinates from frame to reference stimulus coordinates
+				ref_gazeX, ref_gazeY = mapper.mapCoords2D((frame_gazeX, frame_gazeY), frame2ref_2D)
+
+				# convert from reference stimulus to object coordinates
+				objCoords = mapper.ref2obj(np.array([ref_gazeX, ref_gazeY]).reshape(1,2))
+				obj_gazeX, obj_gazeY, obj_gazeZ = objCoords.ravel()
+
+				# create dict
+				thisRow_df = pd.DataFrame({'gaze_ts': ts, 'worldFrame': frameNum, 'confidence':conf,
+											'frame_gazeX': frame_gazeX, 'frame_gazeY': frame_gazeY,
+											'ref_gazeX': ref_gazeX, 'ref_gazeY': ref_gazeY,
+											'obj_gazeX': obj_gazeX, 'obj_gazeY': obj_gazeY, 'obj_gazeZ': obj_gazeZ},
+											index=[i])
+
+				# append this row to the gaze data dataframe
+				gazeData_df = pd.concat([gazeData_df, thisRow_df])
+
+			# store gaze data
+			fr['gazeData'] = gazeData_df
+
+			# draw circles for gaze locations
+			gazeFrame = origFrame.copy()
+			for i,row in gazeData_df.iterrows():
+				frame_gazeX = int(row['frame_gazeX'])
+				frame_gazeY = int(row['frame_gazeY'])
+
+				# set color for last value to be different than previous values for this frame
+				if i == gazeData_df.index.max():
+					cv2.circle(gazeFrame, (frame_gazeX, frame_gazeY), 10, [96, 52, 234], -1)
+				else:
+					cv2.circle(gazeFrame, (frame_gazeX, frame_gazeY), 8, [168, 231, 86], -1)
+
+			# store the gaze frame
+			fr['gazeFrame'] = gazeFrame
+
+	# Return the dict holding all of the info for this frame
+	return fr
 
 
 if __name__ == '__main__':

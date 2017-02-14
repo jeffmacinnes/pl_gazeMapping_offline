@@ -123,7 +123,13 @@ class GazeMapper:
 		objPts_3D = self.ref2obj(refPts)
 
 		# solve perspective-n-point problem
-		rvec, tvec, inliers = cv2.solvePnPRansac(objPts_3D, framePts, self.camMtx, self.distCoefs)
+		# print('here')
+		# print(refPts)
+		# print('here2')
+		# print(framePts)
+		# print('here3')
+		# print(objPts_3D)
+		ret, rvec, tvec, inliers = cv2.solvePnPRansac(objPts_3D, framePts, self.camMtx, self.distCoefs)
 		return rvec, tvec
 
 
