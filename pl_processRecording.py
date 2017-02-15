@@ -1,6 +1,8 @@
 """
 Process a Pupil Labs gaze recording
 -jjm35
+
+Tested with Python 3.6, openCV 3.2
 """
 
 # python 2/3 compatibility
@@ -8,12 +10,15 @@ from __future__ import division
 from __future__ import print_function
 
 import os, sys, shutil
+import matplotlib
+matplotlib.use('tkagg')
 from os.path import join
 from bisect import bisect_left
 import cv2
 import numpy as np 
 import pandas as pd 
 import seaborn as sns
+import matplotlib.pyplot as plt
 import argparse
 import time
 import multiprocessing
@@ -70,7 +75,7 @@ def processRecording(inputDir, refFile, cameraCalib):
 	Loop through each frame of the recording and create output videos
 	"""
 	# Settings:
-	framesToUse = np.arange(0, 10, 1)	
+	framesToUse = np.arange(0, 620, 1)	
 
 	# start time
 	process_startTime = time.time()
@@ -124,21 +129,21 @@ def processRecording(inputDir, refFile, cameraCalib):
 	# define output videos
 	output_prefix = refFile.split('/')[-1:][0].split('.')[0] 	# set the output prefix based on the reference image
 	
-	vidOutFile_orig = join(outputDir, (output_prefix + '_orig.m4v'))
+	vidOutFile_orig = join(outputDir, 'orig.m4v')
 	vidOut_orig = cv2.VideoWriter()
 	vidOut_orig.open(vidOutFile_orig, vidCodec, fps, vidSize, True)	
 
-	vidOutFile_gaze = join(outputDir, (output_prefix + '_gaze.m4v'))
+	vidOutFile_gaze = join(outputDir, 'gaze.m4v')
 	vidOut_gaze = cv2.VideoWriter()
 	vidOut_gaze.open(vidOutFile_gaze, vidCodec, fps, vidSize, True)
 
-	vidOutFile_heatmap = join(outputDir, (output_prefix + '_heatmapEvolving.m4v'))
-	vidOut_heatmap = cv2.VideoWriter()
-	vidOut_heatmap.open(vidOutFile_heatmap, vidCodec, fps, vidSize, True)
+	vidOutFile_summaryWorld = join(outputDir, 'summaryWorld.m4v')
+	vidOut_summaryWorld = cv2.VideoWriter()
+	vidOut_summaryWorld.open(vidOutFile_summaryWorld, vidCodec, fps, vidSize, True)
 
-	vidOutFile_refHeatmap = join(outputDir, (output_prefix + 'Ref_heatmapEvolving.m4v'))
-	vidOut_refHeatmap = cv2.VideoWriter()
-	vidOut_refHeatmap.open(vidOutFile_refHeatmap, vidCodec, fps, refStim_dims, True)
+	vidOutFile_summaryRef = join(outputDir, 'summaryRef.m4v')
+	vidOut_summaryRef = cv2.VideoWriter()
+	vidOut_summaryRef.open(vidOutFile_summaryRef, vidCodec, fps, refStim_dims, True)
 
 
 	### Loop through frames of world video #################################
@@ -158,17 +163,28 @@ def processRecording(inputDir, refFile, cameraCalib):
 			# submit this frame to the processing function
 			processedFrame = processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_timestamps)
 
-			
 			# append this frames gaze data file to the bigger list
+			if frameCounter == framesToUse[0]:
+				gazeData_master = processedFrame['gazeData']
+			else:
+				gazeData_master = pd.concat([gazeData_master, processedFrame['gazeData']])
 
-			# make the heatmaps
-
+			# make the summary visualization (in reference stim coords)
+			gazeSummary_ref = createHeatmap(gazeData_master, frameCounter, mapper.refImgColor)
+			
+			# if there was a good match between reference stim and world frame on this frame
+			if processedFrame['foundGoodMatch']:
+				# project the gazeSummary visualization back into the world coords
+				mappedSummaryFrame = mapper.projectImage2D(processedFrame['origFrame'], processedFrame['ref2frame_2Dtrans'], gazeSummary_ref)
+			else:
+				# otherwise, just place the original frame
+				mappedSummaryFrame = processedFrame['origFrame']
 
 			# Write out this frame's different video files
 			vidOut_orig.write(processedFrame['origFrame'])
 			vidOut_gaze.write(processedFrame['gazeFrame'])
-
-
+			vidOut_summaryRef.write(gazeSummary_ref)
+			vidOut_summaryWorld.write(mappedSummaryFrame)
 
 		# increment frame counter
 		frameCounter += 1
@@ -176,6 +192,11 @@ def processRecording(inputDir, refFile, cameraCalib):
 			vid.release()
 			vidOut_orig.release()
 			vidOut_gaze.release()
+			vidOut_summaryRef.release()
+			vidOut_summaryWorld.release()
+
+			# write out gaze data
+			gazeData_master.to_csv(join(outputDir, 'gazeData_master.tsv'), sep='\t', index=False, float_format='%.3f')
 
 	endTime = time.time()
 	frameProcessing_time = endTime - frameProcessing_startTime
@@ -231,8 +252,10 @@ def processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_ti
 	if not sufficientMatches:
 		# if not enough matches on this frame, store the untouched frames
 		fr['gazeFrame'] = origFrame
+		fr['foundGoodMatch'] = True
 
 	else:
+		fr['foundGoodMatch'] = True
 		### 3D operations ##########################
 		# get mapping from camera to 3D location of reference image. Reference match points treated as 2D plane in the world (z=0)
 		rvec, tvec = mapper.PnP_3Dmapping(ref_matchPts, frame_matchPts)
@@ -245,6 +268,8 @@ def processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_ti
 		### 2D operations ###########################
 		# get the transformation matrices to map between world frame and reference stimuli
 		ref2frame_2D, frame2ref_2D = mapper.get2Dmapping(ref_matchPts, frame_matchPts)
+		fr['ref2frame_2Dtrans'] = ref2frame_2D
+		fr['frame2ref_2Dtrans'] = frame2ref_2D
 
 		### Gaze data operations ####################
 		if thisFrame_gazeData_world.shape[0] == 0:
@@ -314,6 +339,69 @@ def processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_ti
 
 	# Return the dict holding all of the info for this frame
 	return fr
+
+
+def createHeatmap(gazeData_master, frameCounter, refStim):
+	"""
+	Create a heatmap base on x and y gaze values that have been mapped to the reference stimulus
+	Return a cv2 img of the heatmap that is sized according to the refStim
+	"""
+	# retrieve the gaze values mapped to the reference stim
+	heatmap_df = gazeData_master.loc[gazeData_master['worldFrame'] <= frameCounter, ['worldFrame', 'ref_gazeX', 'ref_gazeY']]
+
+	# start the plot
+	refStim_RGB = cv2.cvtColor(refStim, cv2.COLOR_BGR2RGB)
+	w = refStim.shape[1]
+	h = refStim.shape[0]
+	hmDPI = 150
+	fig = plt.figure(figsize=(w/hmDPI, h/hmDPI), dpi=hmDPI)
+	ax = plt.axes([0,0,1,1])
+	ax.imshow(refStim_RGB)
+
+	# draw the heatmap (if there's enough data)
+	if heatmap_df.shape[0] <= 2:
+		heatmap = refStim
+	else:
+		xArr = heatmap_df['ref_gazeX'].values
+		yArr = heatmap_df['ref_gazeY'].values
+
+		# use Seaborne to create a pretty heatmap (as kernel density estimate)
+		sns.set_style('white')
+		sns.despine(trim=True)
+		ax = sns.kdeplot(xArr, yArr,
+						shade=True,
+						shade_lowest=False,
+						cmap='viridis',
+						alpha=0.7)
+		ax.set_xlim(0,w)
+		ax.set_ylim(0,h)
+		plt.axis('off')
+		plt.gca().invert_yaxis()
+
+		# need to draw in order to access the pixel data
+		fig.canvas.draw()
+
+		# store figure as np array
+		heatmap = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep='')
+		heatmap = heatmap.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+		plt.close(fig)
+
+		# add circles for the last dots
+		for i,row in heatmap_df.loc[heatmap_df['worldFrame'] == frameCounter, :].iterrows():
+			ref_gazeX = int(row['ref_gazeX'])
+			ref_gazeY = int(row['ref_gazeY'])
+
+			# set color for last value to be different than previous values for this frame
+			if i == heatmap_df.index.max():
+				cv2.circle(heatmap, (ref_gazeX, ref_gazeY), 10, [96, 52, 234], -1)
+			else:
+				cv2.circle(heatmap, (ref_gazeX, ref_gazeY), 8, [168, 231, 86], -1)
+		
+		# convert to rgb
+		heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+
+	return heatmap
+
 
 
 if __name__ == '__main__':
