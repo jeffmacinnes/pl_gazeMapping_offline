@@ -66,6 +66,12 @@ class GazeMapper:
 		self.refImg_kp, self.refImg_des = self.findFeatures(self.refImg)
 		print('Reference Image: found %s keypoints' % len(self.refImg_kp))
 
+	def undistortFrame(self, frame):
+		"""
+		Undistort the supplied frame according to parameters in the camera calibration
+		"""
+		undistortedFrame = cv2.undistort(frame, self.camMtx, self.distCoefs)
+		return undistortedFrame
 
 	def findFeatures(self, img):
 		"""

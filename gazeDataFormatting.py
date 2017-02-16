@@ -28,7 +28,7 @@ def formatGazeData(input_dir):
 			pupil_data = pickle.load(fh, encoding='bytes')
 	except pickle.UnpicklingError:
 		raise ValueError
-	gaze_list = pupil_data[b'gaze_positions']		# gaze position (world camera)
+	gaze_list = pupil_data['gaze_positions']		# gaze position (world camera)
 
 	# load timestamps 
 	timestamps_path = join(input_dir, 'world_timestamps.npy')
@@ -38,6 +38,21 @@ def formatGazeData(input_dir):
 	gaze_by_frame = correlate_data(gaze_list, timestamps)
 
 	return gaze_by_frame, timestamps
+
+
+def getCameraCalibration(input_dir):
+	"""
+	load the camera calibration file that gets stored with pupil labs recording
+	"""
+	# load calib pickle
+	calib_path = join(input_dir, 'camera_calibration')
+	try:
+		with open(calib_path, 'rb') as fh:
+			calib_data = pickle.load(fh, encoding='bytes')
+	except pickle.UnpicklingError:
+		raise ValueError
+
+	return calib_data
 
 
 def correlate_data(data,timestamps):
@@ -60,7 +75,7 @@ def correlate_data(data,timestamps):
 	frame_idx = 0
 	data_index = 0
 
-	data.sort(key=lambda d: d[b'timestamp'])
+	data.sort(key=lambda d: d['timestamp'])
 
 	while True:
 		try:
@@ -73,7 +88,7 @@ def correlate_data(data,timestamps):
 			# we might loose a data point at the end but we dont care
 			break
 
-		if datum[b'timestamp'] <= ts:
+		if datum['timestamp'] <= ts:
 			datum['index'] = frame_idx
 			data_by_frame[frame_idx].append(datum)
 			data_index +=1
@@ -115,23 +130,23 @@ def writeGazeData_world(input_dir, gazeData_dict):
 							 "gaze_normal1_z"))
 
 		for g in list(chain(*gazeData_dict[export_range])):
-			data = ['{}'.format(g[b"timestamp"]), g["index"], g[b"confidence"], g[b"norm_pos"][0], g[b"norm_pos"][1],
-					" ".join(['{}-{}'.format(b[b'timestamp'], b[b'id']) for b in g[b'base_data']])]  # use str on timestamp to be consitant with csv lib.
+			data = ['{}'.format(g["timestamp"]), g["index"], g["confidence"], g["norm_pos"][0], g["norm_pos"][1],
+					" ".join(['{}-{}'.format(b['timestamp'], b['id']) for b in g['base_data']])]  # use str on timestamp to be consitant with csv lib.
 
 			# add 3d data if avaiblable
 			if g.get('gaze_point_3d', None) is not None:
-				data_3d = [g[b'gaze_point_3d'][0], g[b'gaze_point_3d'][1], g[b'gaze_point_3d'][2]]
+				data_3d = [g['gaze_point_3d'][0], g['gaze_point_3d'][1], g['gaze_point_3d'][2]]
 
 				# binocular
 				if g.get('eye_centers_3d' ,None) is not None:
-					data_3d += g[b'eye_centers_3d'].get(0, [None, None, None])
-					data_3d += g[b'gaze_normals_3d'].get(0, [None, None, None])
-					data_3d += g[b'eye_centers_3d'].get(1, [None, None, None])
-					data_3d += g[b'gaze_normals_3d'].get(1, [None, None, None])
+					data_3d += g['eye_centers_3d'].get(0, [None, None, None])
+					data_3d += g['gaze_normals_3d'].get(0, [None, None, None])
+					data_3d += g['eye_centers_3d'].get(1, [None, None, None])
+					data_3d += g['gaze_normals_3d'].get(1, [None, None, None])
 				# monocular
 				elif g.get('eye_center_3d', None) is not None:
-					data_3d += g[b'eye_center_3d']
-					data_3d += g[b'gaze_normal_3d']
+					data_3d += g['eye_center_3d']
+					data_3d += g['gaze_normal_3d']
 					data_3d += [None]*6
 			else:
 				data_3d = [None]*15

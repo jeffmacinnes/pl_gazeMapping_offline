@@ -24,7 +24,7 @@ import time
 import multiprocessing
 
 # data formatting tools
-from gazeDataFormatting import formatGazeData, writeGazeData_world
+from gazeDataFormatting import formatGazeData, writeGazeData_world, getCameraCalibration
 
 # custom pupil-lab projection tools
 import gazeMappingTools as gm
@@ -75,7 +75,7 @@ def processRecording(inputDir, refFile, cameraCalib):
 	Loop through each frame of the recording and create output videos
 	"""
 	# Settings:
-	framesToUse = np.arange(0, 620, 1)	
+	framesToUse = np.arange(0, 445, 1)	
 
 	# start time
 	process_startTime = time.time()
@@ -85,11 +85,16 @@ def processRecording(inputDir, refFile, cameraCalib):
 	if not os.path.isdir(outputDir):
 		os.makedirs(outputDir)
 
+	### Load the camera calibration #######################
+	camCalib = getCameraCalibration(inputDir)
+	print(camCalib.keys())
+
 	### Prep the gaze data ################################
 	print('Prepping gaze data...')
 	# format pupil data
 	gazeData_world, frame_timestamps = formatGazeData(inputDir)
-	
+	print('n frames: %s' % frame_timestamps.shape)
+
 	# write the gaze data (world camera coords) to a csv file
 	writeGazeData_world(inputDir, gazeData_world)
 
@@ -126,6 +131,10 @@ def processRecording(inputDir, refFile, cameraCalib):
 		fps = vid.get(cv2.cv.CV_CAP_PROP_FPS)
 		vidCodec = cv2.cv.CV_FOURCC(*'mp4v')
 
+	# make sure no attempts on nonexistent frames
+	if totalFrames > framesToUse.max():
+		framesToUse = framesToUse[framesToUse <= totalFrames]
+
 	# define output videos
 	output_prefix = refFile.split('/')[-1:][0].split('.')[0] 	# set the output prefix based on the reference image
 	
@@ -160,24 +169,31 @@ def processRecording(inputDir, refFile, cameraCalib):
 			# grab the gazeData (world coords) for this frame only
 			thisFrame_gazeData_world = gazeWorld_df.loc[gazeWorld_df['index'] == frameCounter]
 
+			# undistort the frame
+			frame = cv2.undistort(frame, camCalib['camera_matrix'], camCalib['dist_coefs'])
+
 			# submit this frame to the processing function
 			processedFrame = processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_timestamps)
-
-			# append this frames gaze data file to the bigger list
-			if frameCounter == framesToUse[0]:
-				gazeData_master = processedFrame['gazeData']
-			else:
-				gazeData_master = pd.concat([gazeData_master, processedFrame['gazeData']])
-
-			# make the summary visualization (in reference stim coords)
-			gazeSummary_ref = createHeatmap(gazeData_master, frameCounter, mapper.refImgColor)
 			
 			# if there was a good match between reference stim and world frame on this frame
 			if processedFrame['foundGoodMatch']:
+
+				# append this frames gaze data file to the bigger list
+				if 'gazeData_master' in locals():
+					gazeData_master = pd.concat([gazeData_master, processedFrame['gazeData']])
+				else:
+					gazeData_master = processedFrame['gazeData']
+
+
+				# make the summary visualization (in reference stim coords)
+				gazeSummary_ref = createHeatmap(gazeData_master, frameCounter, mapper.refImgColor)
+
 				# project the gazeSummary visualization back into the world coords
 				mappedSummaryFrame = mapper.projectImage2D(processedFrame['origFrame'], processedFrame['ref2frame_2Dtrans'], gazeSummary_ref)
+
 			else:
 				# otherwise, just place the original frame
+				gazeSummary_ref = processedFrame['origFrame']
 				mappedSummaryFrame = processedFrame['origFrame']
 
 			# Write out this frame's different video files
@@ -252,7 +268,7 @@ def processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_ti
 	if not sufficientMatches:
 		# if not enough matches on this frame, store the untouched frames
 		fr['gazeFrame'] = origFrame
-		fr['foundGoodMatch'] = True
+		fr['foundGoodMatch'] = False
 
 	else:
 		fr['foundGoodMatch'] = True
@@ -282,6 +298,7 @@ def processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_ti
 										'ref_gazeX', 'ref_gazeY', 
 										'obj_gazeX', 'obj_gazeY', 'obj_gazeZ'])
 			fr['gazeData'] = gazeData_df
+			fr['gazeFrame'] = origFrame
 
 		else:
 			drawGazePt = True
@@ -386,6 +403,23 @@ def createHeatmap(gazeData_master, frameCounter, refStim):
 		heatmap = heatmap.reshape(fig.canvas.get_width_height()[::-1] + (3,))
 		plt.close(fig)
 
+		# add gaze trace
+		for i,row in heatmap_df.iterrows():
+			if i == heatmap_df.index.min():
+				# set the starting point
+				prev_ref_gazeX = int(row['ref_gazeX'])
+				prev_ref_gazeY = int(row['ref_gazeY'])
+			else:
+				cur_ref_gazeX = int(row['ref_gazeX'])
+				cur_ref_gazeY = int(row['ref_gazeY'])
+
+				# draw line connecting previous point to current
+				cv2.line(heatmap, (prev_ref_gazeX, prev_ref_gazeY), (cur_ref_gazeX, cur_ref_gazeY), [107, 234, 101], 3, cv2.LINE_AA)
+
+				# update previous point
+				prev_ref_gazeX = cur_ref_gazeX
+				prev_ref_gazeY = cur_ref_gazeY
+
 		# add circles for the last dots
 		for i,row in heatmap_df.loc[heatmap_df['worldFrame'] == frameCounter, :].iterrows():
 			ref_gazeX = int(row['ref_gazeX'])
@@ -393,9 +427,9 @@ def createHeatmap(gazeData_master, frameCounter, refStim):
 
 			# set color for last value to be different than previous values for this frame
 			if i == heatmap_df.index.max():
-				cv2.circle(heatmap, (ref_gazeX, ref_gazeY), 10, [96, 52, 234], -1)
+				cv2.circle(heatmap, (ref_gazeX, ref_gazeY), 10, [234, 52, 96], -1)
 			else:
-				cv2.circle(heatmap, (ref_gazeX, ref_gazeY), 8, [168, 231, 86], -1)
+				cv2.circle(heatmap, (ref_gazeX, ref_gazeY), 8, [86, 231, 168], -1)
 		
 		# convert to rgb
 		heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
