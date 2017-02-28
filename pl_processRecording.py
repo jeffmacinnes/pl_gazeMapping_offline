@@ -2,6 +2,8 @@
 Process a Pupil Labs gaze recording
 -jjm35
 
+Output stored in 'processed' directory located in directory of the input recording
+
 Tested with Python 3.6, openCV 3.2
 """
 
@@ -24,10 +26,10 @@ import time
 import multiprocessing
 
 # data formatting tools
-from gazeDataFormatting import formatGazeData, writeGazeData_world, getCameraCalibration
+from pl_gazeDataFormatting import formatGazeData, writeGazeData_world, getCameraCalibration
 
 # custom pupil-lab projection tools
-import gazeMappingTools as gm
+import pl_gazeMappingTools as gm
 
 OPENCV3 = (cv2.__version__.split('.')[0] == '3')
 print("OPENCV version " + cv2.__version__)
