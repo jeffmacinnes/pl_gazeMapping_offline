@@ -15,7 +15,6 @@ import os, sys, shutil
 import matplotlib
 matplotlib.use('tkagg')
 from os.path import join
-from bisect import bisect_left
 import cv2
 import numpy as np 
 import pandas as pd 
@@ -23,7 +22,6 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import argparse
 import time
-import multiprocessing
 
 # data formatting tools
 from pl_gazeDataFormatting import formatGazeData, writeGazeData_world, getCameraCalibration
@@ -70,6 +68,10 @@ For clarity, here are those different systems and the labels used when referenci
 								set will be used on subsequent measurements, such as camera position. 
 """
 
+# global settings/vars
+obj_dims = (30,20) 		# real world dims (height, width) in inches of the stimulus
+
+
 def processRecording(inputDir, refFile, cameraCalib):
 	"""
 	Open the recording in the specified input dir. 
@@ -110,7 +112,6 @@ def processRecording(inputDir, refFile, cameraCalib):
 	refStim = cv2.imread(refFile)   		# load in ref stimulus
 	
 	refStim_dims = (refStim.shape[1], refStim.shape[0])  # pixel dims of stimulus (height, width)
-	obj_dims = (30,20) 		# real world dims (height, width) in inches of the stimulus
 
 	# instantiate the gazeMappingTool object
 	mapper = gm.GazeMapper(cameraCalib, refStim, obj_dims)
@@ -169,7 +170,7 @@ def processRecording(inputDir, refFile, cameraCalib):
 		if (ret==True) and (frameCounter in framesToUse):
 
 			# grab the gazeData (world coords) for this frame only
-			thisFrame_gazeData_world = gazeWorld_df.loc[gazeWorld_df['index'] == frameCounter]
+			thisFrame_gazeData_world = gazeWorld_df.loc[gazeWorld_df['frame_idx'] == frameCounter]
 
 			# undistort the frame
 			frame = cv2.undistort(frame, camCalib['camera_matrix'], camCalib['dist_coefs'])

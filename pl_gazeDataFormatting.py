@@ -32,12 +32,12 @@ def formatGazeData(input_dir):
 
 	# load timestamps 
 	timestamps_path = join(input_dir, 'world_timestamps.npy')
-	timestamps = np.load(timestamps_path)
+	frame_timestamps = np.load(timestamps_path)
 
 	# align gaze with world camera timestamps
-	gaze_by_frame = correlate_data(gaze_list, timestamps)
+	gaze_by_frame = correlate_data(gaze_list, frame_timestamps)
 
-	return gaze_by_frame, timestamps
+	return gaze_by_frame, frame_timestamps
 
 
 def getCameraCalibration(input_dir):
@@ -89,7 +89,7 @@ def correlate_data(data,timestamps):
 			break
 
 		if datum['timestamp'] <= ts:
-			datum['index'] = frame_idx
+			datum['frame_idx'] = frame_idx
 			data_by_frame[frame_idx].append(datum)
 			data_index +=1
 		else:
@@ -108,47 +108,12 @@ def writeGazeData_world(input_dir, gazeData_dict):
 	with open(csv_file, 'w', encoding='utf-8', newline='') as csvfile:
 		csv_writer = csv.writer(csvfile, delimiter='\t')
 		csv_writer.writerow(("timestamp",
-							 "index",
+							 "frame_idx",
 							 "confidence",
 							 "norm_pos_x",
-							 "norm_pos_y",
-							 "base_data",
-							 "gaze_point_3d_x",
-							 "gaze_point_3d_y",
-							 "gaze_point_3d_z",
-							 "eye_center0_3d_x",
-							 "eye_center0_3d_y",
-							 "eye_center0_3d_z",
-							 "gaze_normal0_x",
-							 "gaze_normal0_y",
-							 "gaze_normal0_z",
-							 "eye_center1_3d_x",
-							 "eye_center1_3d_y",
-							 "eye_center1_3d_z",
-							 "gaze_normal1_x",
-							 "gaze_normal1_y",
-							 "gaze_normal1_z"))
+							 "norm_pos_y"))
 
 		for g in list(chain(*gazeData_dict[export_range])):
-			data = ['{}'.format(g["timestamp"]), g["index"], g["confidence"], g["norm_pos"][0], g["norm_pos"][1],
-					" ".join(['{}-{}'.format(b['timestamp'], b['id']) for b in g['base_data']])]  # use str on timestamp to be consitant with csv lib.
+			data = ['{}'.format(g["timestamp"]), g["frame_idx"], g["confidence"], g["norm_pos"][0], g["norm_pos"][1]]  # use str on timestamp to be consitant with csv lib.
 
-			# add 3d data if avaiblable
-			if g.get('gaze_point_3d', None) is not None:
-				data_3d = [g['gaze_point_3d'][0], g['gaze_point_3d'][1], g['gaze_point_3d'][2]]
-
-				# binocular
-				if g.get('eye_centers_3d' ,None) is not None:
-					data_3d += g['eye_centers_3d'].get(0, [None, None, None])
-					data_3d += g['gaze_normals_3d'].get(0, [None, None, None])
-					data_3d += g['eye_centers_3d'].get(1, [None, None, None])
-					data_3d += g['gaze_normals_3d'].get(1, [None, None, None])
-				# monocular
-				elif g.get('eye_center_3d', None) is not None:
-					data_3d += g['eye_center_3d']
-					data_3d += g['gaze_normal_3d']
-					data_3d += [None]*6
-			else:
-				data_3d = [None]*15
-			data += data_3d
 			csv_writer.writerow(data)
