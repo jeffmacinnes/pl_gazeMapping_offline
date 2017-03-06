@@ -12,6 +12,7 @@ from __future__ import division
 from __future__ import print_function
 
 import os, sys, shutil
+import fileinput
 import matplotlib
 matplotlib.use('tkagg')
 from os.path import join
@@ -22,6 +23,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import argparse
 import time
+from scipy.ndimage import filters
 
 # data formatting tools
 from pl_gazeDataFormatting import formatGazeData, writeGazeData_world, getCameraCalibration
@@ -208,11 +210,15 @@ def processRecording(inputDir, refFile, cameraCalib):
 		# increment frame counter
 		frameCounter += 1
 		if frameCounter > np.max(framesToUse):
+			# release all videos
 			vid.release()
 			vidOut_orig.release()
 			vidOut_gaze.release()
 			vidOut_summaryRef.release()
 			vidOut_summaryWorld.release()
+
+			# prep 3D animation
+			create3Danimation(outputDir, refFile, gazeData_master)
 
 			# write out gaze data
 			gazeData_master.to_csv(join(outputDir, 'gazeData_master.tsv'), sep='\t', index=False, float_format='%.3f')
@@ -299,7 +305,9 @@ def processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_ti
 			gazeData_df = pd.DataFrame(columns=['gaze_ts', 'worldFrame', 'confidence',
 										'frame_gazeX', 'frame_gazeY',
 										'ref_gazeX', 'ref_gazeY', 
-										'obj_gazeX', 'obj_gazeY', 'obj_gazeZ'])
+										'obj_gazeX', 'obj_gazeY', 'obj_gazeZ',
+										'camX', 'camY', 'camZ',
+										'camTheta', 'camRX', 'camRY', 'camRZ'])
 			fr['gazeData'] = gazeData_df
 			fr['gazeFrame'] = origFrame
 
@@ -310,7 +318,18 @@ def processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_ti
 			gazeData_df = pd.DataFrame(columns=['gaze_ts', 'worldFrame', 'confidence',
 										'frame_gazeX', 'frame_gazeY',
 										'ref_gazeX', 'ref_gazeY', 
-										'obj_gazeX', 'obj_gazeY', 'obj_gazeZ'])
+										'obj_gazeX', 'obj_gazeY', 'obj_gazeZ',
+										'camX', 'camY', 'camZ',
+										'camTheta', 'camRX', 'camRY', 'camRZ'])
+
+			# get the camera position and orientation
+			camX = camPosition[0]
+			camY = camPosition[1]
+			camZ = camPosition[2]
+			camTheta = camOrientation[0]
+			camRX = camOrientation[1]
+			camRY = camOrientation[2]
+			camRZ = camOrientation[3]
 			
 			# grab all gaze data for this frame, translate to different coordinate systems
 			for i,gazeRow in thisFrame_gazeData_world.iterrows():
@@ -333,7 +352,9 @@ def processFrame(frameCounter, frame, mapper, thisFrame_gazeData_world, frame_ti
 				thisRow_df = pd.DataFrame({'gaze_ts': ts, 'worldFrame': frameNum, 'confidence':conf,
 											'frame_gazeX': frame_gazeX, 'frame_gazeY': frame_gazeY,
 											'ref_gazeX': ref_gazeX, 'ref_gazeY': ref_gazeY,
-											'obj_gazeX': obj_gazeX, 'obj_gazeY': obj_gazeY, 'obj_gazeZ': obj_gazeZ},
+											'obj_gazeX': obj_gazeX, 'obj_gazeY': obj_gazeY, 'obj_gazeZ': obj_gazeZ,
+											'camX': camX, 'camY': camY, 'camZ': camZ,
+											'camTheta': camTheta, 'camRX':camRX, 'camRY':camRY, 'camRZ':camRZ},
 											index=[i])
 
 				# append this row to the gaze data dataframe
@@ -439,6 +460,76 @@ def createHeatmap(gazeData_master, frameCounter, refStim):
 
 	return heatmap
 
+
+def create3Danimation(output_dir, referenceImage_file, gazeData_df):
+	"""
+	create an animated 3D reconstruction of viewing behavior
+	based on the javascript template
+	"""
+
+	# copy the template directory
+	if os.path.isdir(join(output_dir, '3D')):	
+		shutil.rmtree(join(output_dir, '3D'))			# remove if already exists
+	shutil.copytree('visTemplate_3D', join(output_dir, '3D'))
+
+	# replace obj dimension vars in javascript file with the dims specified here
+	for line in fileinput.input(join(output_dir, '3D', 'gazeMapping3D.js'), inplace=True):
+		if 'var targetWidth =' in line:
+			line = line.replace('var targetWidth = 76;', 'var targetWidth = {};'.format(str(obj_dims[1])))
+		if 'var targetHeight =' in line:
+			line = line.replace('var targetHeight = 82;', 'var targetHeight = {};'.format(str(obj_dims[0])))
+		sys.stdout.write(line) 
+
+	# make resized copy of the reference image
+	refStim = cv2.imread(referenceImage_file)   		# load in ref stimulus
+	im_h = refStim.shape[0]
+	im_w = refStim.shape[1]
+	aspect_ratio = im_h/im_w
+	new_w = 600   										# max width
+	new_h = int(new_w * aspect_ratio)
+	refStim_small = cv2.resize(refStim, (new_w, new_h))
+	cv2.imwrite(join(output_dir, '3D', 'textures', 'target_small.jpg'), refStim_small)
+
+	### format the gaze_df
+	# there are multiple gaze values per frame; take the average by frame
+	df_byFrame = gazeData_df.groupby('worldFrame').mean()
+
+	# interpolate over any missing values
+	df_byFrame.interpolate(method='linear', inplace=True)
+
+	# apply smoothing function the the camera position/orientation columns
+	dfSmooth = df_byFrame.loc[:, ['camX', 'camY', 'camZ', 'camTheta', 'camRX', 'camRY', 'camRZ']].apply(smoothMotion, axis=0)
+
+	# combine the smoothed camera movements with the gaze coordinates (in 3D object space)
+	animation_df = pd.concat([dfSmooth, df_byFrame.loc[:, ['obj_gazeX', 'obj_gazeY', 'obj_gazeZ']]], axis=1)
+
+	# write to csv file
+	animation_df.to_csv(join(output_dir, '3D', 'data', 'camera_and_gaze_smooth.csv'), float_format='%.3f', sep=',', index=False)
+
+
+def smoothMotion(arr):
+	"""
+	Apply a Gaussian filter to the supplied array
+	"""
+	keepGoing = True
+	while keepGoing:
+		# calculate the 1st order differential
+		arrDiff = np.diff(arr)
+		arrDiff = np.insert(arrDiff, 0, 0)		# insert 0 to make matching arr size
+
+		# remove datapts where the difference is greater than 5 and interpolate over
+		arrFilt = arr.copy()
+		arrFilt[np.abs(arrDiff)>3] = np.nan
+
+		if sum(np.isnan(arrFilt)) == 0:
+		    keepGoing = False
+
+		arrInterp = pd.Series(arrFilt).interpolate()
+
+		# smooth with Gaussian filter
+		arr = filters.gaussian_filter1d(arrInterp, 3)
+
+	return arr
 
 
 if __name__ == '__main__':
